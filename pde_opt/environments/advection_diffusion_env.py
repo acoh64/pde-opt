@@ -104,7 +104,7 @@ class AdvectionDiffusionEnv(PDEEnv):
         self._time += self.step_dt
 
         obs = self._get_obs()
-        reward = self.reward_function(obs)
+        reward = self.reward_function(self._state) #TODO: should this be obs or state?
         return (
             obs,
             reward,
