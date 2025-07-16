@@ -1,5 +1,5 @@
 import dataclasses
-
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 
@@ -17,7 +17,6 @@ class DiffusionLegendrePolynomials:
 
 @dataclasses.dataclass
 class ChemicalPotentialLegendrePolynomials:
-
     max_degree: int
 
     def __post_init__(self):
@@ -29,7 +28,6 @@ class ChemicalPotentialLegendrePolynomials:
 
 @dataclasses.dataclass
 class ExpLegendrePolynomials:
-
     max_degree: int
 
     def __post_init__(self):
@@ -42,7 +40,6 @@ class ExpLegendrePolynomials:
 
 @dataclasses.dataclass
 class LegendrePolynomialsRecurrence:
-
     max_degree: int
 
     def __post_init__(self):
@@ -90,3 +87,30 @@ class LegendrePolynomialsRecurrence:
 
     def __call__(self, params, inputs):
         return self.func(params, inputs)
+
+
+# Equinox wrapper modules for parameter optimization
+class DiffusionLegendrePolynomialsWrapper(eqx.Module):
+    params: jax.Array
+    function: DiffusionLegendrePolynomials
+
+    def __init__(self, params: jax.Array):
+        super().__init__()
+        self.params = params
+        self.function = DiffusionLegendrePolynomials(len(params)-1)
+
+    def __call__(self, inputs):
+        return self.function(self.params, inputs)
+
+
+class ChemicalPotentialLegendrePolynomialsWrapper(eqx.Module):
+    params: jax.Array
+    function: ChemicalPotentialLegendrePolynomials
+
+    def __init__(self, params: jax.Array):
+        super().__init__()
+        self.params = params
+        self.function = ChemicalPotentialLegendrePolynomials(len(params)-1)
+
+    def __call__(self, inputs):
+        return self.function(self.params, inputs)
