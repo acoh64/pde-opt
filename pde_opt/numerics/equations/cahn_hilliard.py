@@ -12,7 +12,7 @@ from .base_eq import BaseEquation
 
 
 @dataclasses.dataclass
-class CahnHilliard2D(BaseEquation):
+class CahnHilliard2DPeriodic(BaseEquation):
     domain: Domain
     kappa: float
     mu: Union[Callable, eqx.Module]  # Can be a callable or Equinox module
@@ -39,37 +39,37 @@ class CahnHilliard2D(BaseEquation):
         return self.ifft(self.two_pi_i_kx * tmpx + self.two_pi_i_ky * tmpy).real
 
 
+# @dataclasses.dataclass
+# class CahnHilliard2DSmoothedBoundary(BaseEquation):
+#     domain: Domain
+#     gamma: float
+#     chem_pot: Callable
+#     D: Callable
+#     space: str = "R"
+
+#     def __post_init__(self):
+#         self.psi = self.domain.geometry.smooth
+#         self.gradxf = (
+#             lambda arr: (jnp.roll(arr, -1, axis=1) - arr) / (self.domain.dx[0])
+#         )
+#         self.gradyf = (
+#             lambda arr: (jnp.roll(arr, -1, axis=0) - arr) / (self.domain.dx[1])
+#         )
+#         self.gradxb = lambda arr: (arr - jnp.roll(arr, 1, axis=1)) / (self.domain.dx[0])
+#         self.gradyb = lambda arr: (arr - jnp.roll(arr, 1, axis=0)) / (self.domain.dx[0])
+
+#     def rhs(self, state, t):
+#         tmp1 = self.psi * self.gradxf(state)
+#         tmp2 = self.psi * self.gradyf(state)
+#         tmp3 = (self.gamma / self.psi) * (self.gradxb(tmp1) + self.gradyb(tmp2))
+#         tmp4 = self.chem_pot(state) - tmp3
+#         tmp5 = self.gradxf(tmp4)
+#         tmp6 = self.gradyf(tmp4)
+#         tmp7 = self.psi * self.D(state) * state
+#         return (self.gradxb(tmp7 * tmp5) + self.gradyb(tmp7 * tmp6)) / self.psi
+
 @dataclasses.dataclass
-class CahnHilliard2DSmoothedBoundary(BaseEquation):
-    domain: Domain
-    gamma: float
-    chem_pot: Callable
-    D: Callable
-    space: str = "R"
-
-    def __post_init__(self):
-        self.psi = self.domain.geometry.smooth
-        self.gradxf = (
-            lambda arr: (jnp.roll(arr, -1, axis=1) - arr) / (self.domain.dx[0])
-        )
-        self.gradyf = (
-            lambda arr: (jnp.roll(arr, -1, axis=0) - arr) / (self.domain.dx[1])
-        )
-        self.gradxb = lambda arr: (arr - jnp.roll(arr, 1, axis=1)) / (self.domain.dx[0])
-        self.gradyb = lambda arr: (arr - jnp.roll(arr, 1, axis=0)) / (self.domain.dx[0])
-
-    def rhs(self, state, t):
-        tmp1 = self.psi * self.gradxf(state)
-        tmp2 = self.psi * self.gradyf(state)
-        tmp3 = (self.gamma / self.psi) * (self.gradxb(tmp1) + self.gradyb(tmp2))
-        tmp4 = self.chem_pot(state) - tmp3
-        tmp5 = self.gradxf(tmp4)
-        tmp6 = self.gradyf(tmp4)
-        tmp7 = self.psi * self.D(state) * state
-        return (self.gradxb(tmp7 * tmp5) + self.gradyb(tmp7 * tmp6)) / self.psi
-
-@dataclasses.dataclass
-class CahnHilliard3D(BaseEquation):
+class CahnHilliard3DPeriodic(BaseEquation):
     domain: Domain
     kappa: float
     mu: Union[Callable, eqx.Module]  # Can be a callable or Equinox module

@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from typing import Union, Tuple, Optional, Callable, Dict, Any
-from .boundary_conditions import get_neighbor_indices, BoundaryType
+from .boundary_conditions import BoundaryType
 
 # taken from evoxels
 
@@ -65,6 +65,10 @@ def laplacian(dx: Union[float, Tuple[float, ...]] = 1.0,
         >>> lap_op = laplacian(dx=0.1, boundary_conditions={0: ('time_dependent_dirichlet', time_boundary_func)})
         >>> result = lap_op(field, time=1.5)
     """
+    # Default boundary conditions (zero-padding)
+    if boundary_conditions is None:
+        boundary_conditions = {}
+    
     def _laplacian_operator(field: jax.Array, time: Optional[float] = None) -> jax.Array:
         """Compute the Laplacian of the input field."""
         if field.ndim not in [1, 2, 3]:
@@ -82,10 +86,6 @@ def laplacian(dx: Union[float, Tuple[float, ...]] = 1.0,
         dx_array = jnp.array(dx_array)
         dx2 = dx_array ** 2
         
-        # Default boundary conditions (zero-padding)
-        if boundary_conditions is None:
-            boundary_conditions = {}
-        
         if field.ndim == 1:
             return _compute_1d_laplacian(field, dx2[0], boundary_conditions, time)
         elif field.ndim == 2:
@@ -101,8 +101,16 @@ def _compute_1d_laplacian(field: jax.Array, dx2: float, boundary_conditions: Dic
     boundary_config = boundary_conditions.get(axis, ('dirichlet', 0.0))
     boundary_type, boundary_values = boundary_config
     
-    left, right = get_neighbor_indices(field, boundary_type, boundary_values, axis, time)
-    return (left + right - 2 * field) / dx2
+    # Get padded field with boundary conditions
+    from .boundary_conditions import apply_boundary_conditions
+    padded_field = apply_boundary_conditions(field, boundary_type, boundary_values, axis, time)
+    
+    # Use efficient slicing for finite differences
+    left = padded_field[:-2]   # slice(0, -2)
+    right = padded_field[2:]    # slice(2, None)
+    center = padded_field[1:-1] # slice(1, -1) - this is the original field
+    
+    return (left + right - 2 * center) / dx2
 
 def _compute_2d_laplacian(field: jax.Array, dx2: Tuple[float, float], boundary_conditions: Dict[str, Any], time: Optional[float] = None) -> jax.Array:
     """Compute 2D Laplacian using central finite differences."""
@@ -112,13 +120,26 @@ def _compute_2d_laplacian(field: jax.Array, dx2: Tuple[float, float], boundary_c
     x_bc = boundary_conditions.get(1, ('dirichlet', 0.0))  # x-axis (axis=1)
     y_bc = boundary_conditions.get(0, ('dirichlet', 0.0))  # y-axis (axis=0)
     
-    # Get neighbors for x-direction
-    left, right = get_neighbor_indices(field, x_bc[0], x_bc[1], axis=1, time=time)
+    from .boundary_conditions import apply_boundary_conditions
     
-    # Get neighbors for y-direction  
-    bottom, top = get_neighbor_indices(field, y_bc[0], y_bc[1], axis=0, time=time)
+    # Create a single padded array with boundary conditions for both dimensions
+    # First pad in y-direction (axis=0)
+    padded = apply_boundary_conditions(field, y_bc[0], y_bc[1], axis=0, time=time)
+    # Then pad in x-direction (axis=1)
+    padded = apply_boundary_conditions(padded, x_bc[0], x_bc[1], axis=1, time=time)
     
-    return (left + right) / dx2_x + (bottom + top) / dx2_y - 2 * field * (1/dx2_x + 1/dx2_y)
+    # Use efficient slicing for finite differences
+    # For x-direction (axis=1)
+    left_x = padded[:, :-2]   # slice(None, slice(0, -2))
+    right_x = padded[:, 2:]    # slice(None, slice(2, None))
+    center_x = padded[:, 1:-1] # slice(None, slice(1, -1))
+    
+    # For y-direction (axis=0)
+    bottom_y = padded[:-2, :]   # slice(0, -2), slice(None)
+    top_y = padded[2:, :]       # slice(2, None), slice(None)
+    center_y = padded[1:-1, :]  # slice(1, -1), slice(None)
+    
+    return (left_x + right_x) / dx2_x + (bottom_y + top_y) / dx2_y - 2 * center_x * (1/dx2_x + 1/dx2_y)
 
 def _compute_3d_laplacian(field: jax.Array, dx2: Tuple[float, float, float], boundary_conditions: Dict[str, Any], time: Optional[float] = None) -> jax.Array:
     """Compute 3D Laplacian using central finite differences."""
@@ -129,12 +150,31 @@ def _compute_3d_laplacian(field: jax.Array, dx2: Tuple[float, float, float], bou
     y_bc = boundary_conditions.get(1, ('dirichlet', 0.0))  # y-axis (axis=1)
     z_bc = boundary_conditions.get(0, ('dirichlet', 0.0))  # z-axis (axis=0)
     
-    # Get neighbors for each direction
-    left, right = get_neighbor_indices(field, x_bc[0], x_bc[1], axis=2, time=time)
-    bottom, top = get_neighbor_indices(field, y_bc[0], y_bc[1], axis=1, time=time)
-    back, front = get_neighbor_indices(field, z_bc[0], z_bc[1], axis=0, time=time)
+    from .boundary_conditions import apply_boundary_conditions
     
-    return (left + right) / dx2_x + (bottom + top) / dx2_y + (back + front) / dx2_z - 2 * field * (1/dx2_x + 1/dx2_y + 1/dx2_z)
+    # Create a single padded array with boundary conditions for all dimensions
+    # Apply boundary conditions sequentially for each dimension
+    padded = apply_boundary_conditions(field, z_bc[0], z_bc[1], axis=0, time=time)
+    padded = apply_boundary_conditions(padded, y_bc[0], y_bc[1], axis=1, time=time)
+    padded = apply_boundary_conditions(padded, x_bc[0], x_bc[1], axis=2, time=time)
+    
+    # Use efficient slicing for finite differences
+    # For x-direction (axis=2)
+    left_x = padded[:, :, :-2]   # slice(None, None, slice(0, -2))
+    right_x = padded[:, :, 2:]    # slice(None, None, slice(2, None))
+    center_x = padded[:, :, 1:-1] # slice(None, None, slice(1, -1))
+    
+    # For y-direction (axis=1)
+    bottom_y = padded[:, :-2, :]   # slice(None, slice(0, -2), None)
+    top_y = padded[:, 2:, :]       # slice(None, slice(2, None), None)
+    center_y = padded[:, 1:-1, :]  # slice(None, slice(1, -1), None)
+    
+    # For z-direction (axis=0)
+    back_z = padded[:-2, :, :]     # slice(0, -2), slice(None, None)
+    front_z = padded[2:, :, :]      # slice(2, None), slice(None, None)
+    center_z = padded[1:-1, :, :]  # slice(1, -1), slice(None, None)
+    
+    return (left_x + right_x) / dx2_x + (bottom_y + top_y) / dx2_y + (back_z + front_z) / dx2_z - 2 * center_x * (1/dx2_x + 1/dx2_y + 1/dx2_z)
 
 # Keep the original laplace method for backward compatibility
 def laplace(self, field):
