@@ -182,7 +182,7 @@ class CahnHilliard2DSmoothedBoundary(BaseEquation):
 
     def rhs_fd(self, state, t):
         hx, hy = self.domain.dx
-        mu = self.mu(state) - self.kappa * _lap_2nd_2D(state, hx, hy)
+        mu = self.mu(state)
         mask_avgx = _avgx_c2f(self.psi)
         mask_avgy = _avgy_c2f(self.psi)
         inner_term = mu - (self.kappa / self.psi) * (_divx_f2c(mask_avgx * _gradx_c2f(state, hx), hx) + _divy_f2c(mask_avgy * _grady_c2f(state, hy), hy))
