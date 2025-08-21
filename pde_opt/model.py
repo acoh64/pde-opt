@@ -27,6 +27,42 @@ class OptimizationModel:
         self.equation_type = equation_type
         self.domain = domain
         self.solver_type = solver_type
+        self.check_equation_solver_compatibility()
+
+    def check_equation_solver_compatibility(self):
+        """Check that equation type has all required attributes specified by solver.
+
+        Raises:
+            ValueError: If equation is missing any required attributes from solver.
+        """
+        # Get required attributes from solver if they exist
+        if not hasattr(self.solver_type, "required_equation_attrs"):
+            return
+
+        solver_required_attrs = self.solver_type.required_equation_attrs
+
+        # Check each required attribute exists in equation class
+        missing_attrs = []
+        for attr in solver_required_attrs:
+            if not hasattr(self.equation_type, attr):
+                missing_attrs.append(attr)
+
+        if missing_attrs:
+            raise ValueError(
+                f"Equation type {self.equation_type.__name__} is missing required "
+                f"attributes for solver {self.solver_type.__name__}: {missing_attrs}"
+            )
+
+    def _prepare_solver_params(self, solver_parameters, equation_parameters):
+        """Prepare solver parameters by extracting required equation attributes."""
+        # Create the equation with the given parameters
+        
+        full_solver_params = solver_parameters.copy()
+        if hasattr(self.solver_type, "required_equation_attrs"):
+            for attr_name in self.solver_type.required_equation_attrs:
+                full_solver_params[attr_name] = equation_parameters[attr_name]
+        
+        return full_solver_params
 
     def solve(
         self,
@@ -40,7 +76,7 @@ class OptimizationModel:
     ):
         """
         Solve the equation with given parameters.
-        
+
         Args:
             parameters: Dictionary of parameters to use for the equation
             y0: Initial condition
@@ -55,26 +91,15 @@ class OptimizationModel:
         Returns:
             The solution to the equation at the given times in saveat
         """
+
+        full_solver_params = self._prepare_solver_params(solver_parameters, parameters)
+
         # Initialize the equation with the given parameters
         equation = self.equation_type(domain=self.domain, **parameters)
-        
-        
-        # Try to get required attributes from solver class
-        if hasattr(self.solver_type, 'required_equation_attrs'):
-            solver_equation_attrs = self.solver_type.required_equation_attrs
-        else:
-            solver_equation_attrs = []
-        
-        # Prepare solver parameters including equation attributes if specified
-        full_solver_params = solver_parameters.copy()
-        if solver_equation_attrs:
-            for attr_name in solver_equation_attrs:
-                if hasattr(equation, attr_name):
-                    full_solver_params[attr_name] = getattr(equation, attr_name)
-        
+
         # Initialize the solver with solver_parameters and equation attributes
         solver = self.solver_type(**full_solver_params)
-        
+
         # Solve with diffrax
         solution = dfx.diffeqsolve(
             dfx.ODETerm(jax.jit(lambda t, y, args: equation.rhs(y, t))),
@@ -88,7 +113,7 @@ class OptimizationModel:
             throw=False,
             adjoint=adjoint,
         )
-        
+
         return solution.ys
 
     def residual_single(
@@ -115,9 +140,46 @@ class OptimizationModel:
             reg: scalar
         """
         pred = self.solve(parameters, y0, ts, solver_parameters, adjoint=adjoint)
-        data_residual = values - pred[1:]  # pred[0] is initial, values aligns with pred[1:]
+        data_residual = (
+            values - pred[1:]
+        )  # pred[0] is initial, values aligns with pred[1:]
 
         return data_residual
+
+    def regularization(
+        self,
+        parameters,
+        weights,
+        lambda_reg,
+    ):
+        """
+        Compute regularization for a single initial condition.
+        Args:
+            parameters: parameters for the equation
+            weights: regularization weights
+            lambda_reg: regularization coefficient
+        Returns:
+            reg: scalar
+        """
+        # Loop through weights keys and apply regularization to corresponding parameters
+        reg = 0.0
+        for key in weights.keys():
+            if weights[key] is not None:
+                param_value = parameters[key]
+                weight_value = weights[key]
+                
+                # Use tree_map to handle nested structures within this key
+                reg += lambda_reg * jax.tree_util.tree_reduce(
+                    jax.numpy.add,
+                    jax.tree_util.tree_map(
+                        lambda w, v: jax.numpy.sum(w * v**2) if isinstance(v, jax.Array) else 0.0,
+                        weight_value,
+                        param_value,
+                        is_leaf=lambda x: isinstance(x, jax.Array)
+                    )
+                )
+        
+        return reg
 
     def residuals(
         self,
@@ -144,26 +206,21 @@ class OptimizationModel:
             total_reg: scalar
         """
         y0s, values = y0s__values
-        single = partial(self.residual_single, parameters, solver_parameters, ts=ts, adjoint=adjoint)
+        single = partial(
+            self.residual_single, parameters, solver_parameters, ts=ts, adjoint=adjoint
+        )
         batch_residuals = eqx.filter_vmap(
-            lambda y0, val: single(y0, val),
-            in_axes=(0, 0)
+            lambda y0, val: single(y0, val), in_axes=(0, 0)
         )(y0s, values)
 
-        reg = lambda_reg * jax.tree_util.tree_reduce(
-            jax.numpy.add,
-            jax.tree_util.tree_map(
-                lambda w, v: None if w is None else (jax.numpy.sum(w * v**2) if isinstance(v, jax.Array) else 0.0),
-                weights,
-                parameters,
-                is_leaf=lambda x: x is None
-            ),
-        )
-        
-        return batch_residuals, reg 
+        reg = self.regularization(parameters, weights, lambda_reg)
 
-    def train(self, data, inds, init_parameters, solver_parameters, weights, lambda_reg):
-        # TODO: separately have the static params and the optimization params
+        return batch_residuals, reg
+
+
+    def train(
+        self, data, inds, opt_parameters, static_parameters, solver_parameters, weights, lambda_reg
+    ):
         """
         Train the model on the given data.
         Args:
@@ -172,26 +229,43 @@ class OptimizationModel:
             init_parameters: The initial parameters for the model
         """
 
+        # TODO: might need to fix regularization
+        # TODO: add reversemode for adjoint with normal MSE
+
         y0s = jnp.array([data["ys"][ind[0]] for ind in inds])
-        values = jnp.array([jnp.array([data["ys"][ind[i]] for i in range(1, len(ind))]) for ind in inds])
-        ts = jnp.array([data["ts"][inds[0][i]] - data["ts"][inds[0][0]] for i in range(len(inds[0]))])
+        values = jnp.array(
+            [
+                jnp.array([data["ys"][ind[i]] for i in range(1, len(ind))])
+                for ind in inds
+            ]
+        )
+        ts = jnp.array(
+            [
+                data["ts"][inds[0][i]] - data["ts"][inds[0][0]]
+                for i in range(len(inds[0]))
+            ]
+        )
 
-        params_array, params_aux = eqx.partition(init_parameters, eqx.is_array)
+        residuals_ = partial(
+            self.residuals,
+            solver_parameters=solver_parameters,
+            weights=weights,
+            lambda_reg=lambda_reg,
+            ts=ts,
+        )
 
-        residuals_ = partial(self.residuals, solver_parameters=solver_parameters, weights=weights, lambda_reg=lambda_reg, ts=ts)
-
-        def residuals_wrapper(params_array, args):
-            # Recombine array and aux parts
-            full_params = eqx.combine(params_array, params_aux)
+        def residuals_wrapper(opt_params, args):
+            full_params = {**opt_params, **static_parameters}
             return residuals_(full_params, args)
 
         solver = optx.LevenbergMarquardt(
-            rtol=1e-8, atol=1e-8, verbose=frozenset({"step", "accepted", "loss", "step_size"})
+            rtol=1e-8,
+            atol=1e-8,
+            verbose=frozenset({"step", "accepted", "loss", "step_size"}),
         )
 
-        sol = optx.least_squares(residuals_wrapper, solver, params_array, args=(y0s, values))
+        sol = optx.least_squares(
+            residuals_wrapper, solver, opt_parameters, args=(y0s, values)
+        )
 
-        full_params = eqx.combine(sol.value, params_aux)
-        
-        return full_params
-        
+        return sol.value
