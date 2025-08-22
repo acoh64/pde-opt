@@ -1,7 +1,7 @@
 from typing import Type, Dict, Any, List
 
-from pde_opt.numerics.equations import BaseEquation
-from pde_opt.numerics import domains
+from .numerics.equations import BaseEquation
+from .numerics import domains
 import diffrax as dfx
 import jax
 import jax.numpy as jnp
@@ -53,15 +53,15 @@ class OptimizationModel:
                 f"attributes for solver {self.solver_type.__name__}: {missing_attrs}"
             )
 
-    def _prepare_solver_params(self, solver_parameters, equation_parameters):
+    def _prepare_solver_params(self, solver_parameters, equation):
         """Prepare solver parameters by extracting required equation attributes."""
         # Create the equation with the given parameters
-        
+
         full_solver_params = solver_parameters.copy()
         if hasattr(self.solver_type, "required_equation_attrs"):
             for attr_name in self.solver_type.required_equation_attrs:
-                full_solver_params[attr_name] = equation_parameters[attr_name]
-        
+                full_solver_params[attr_name] = getattr(equation, attr_name)
+
         return full_solver_params
 
     def solve(
@@ -92,10 +92,10 @@ class OptimizationModel:
             The solution to the equation at the given times in saveat
         """
 
-        full_solver_params = self._prepare_solver_params(solver_parameters, parameters)
-
         # Initialize the equation with the given parameters
         equation = self.equation_type(domain=self.domain, **parameters)
+
+        full_solver_params = self._prepare_solver_params(solver_parameters, equation)
 
         # Initialize the solver with solver_parameters and equation attributes
         solver = self.solver_type(**full_solver_params)
@@ -163,22 +163,25 @@ class OptimizationModel:
         """
         # Loop through weights keys and apply regularization to corresponding parameters
         reg = 0.0
+
+        # Filter out None values and only process valid arrays
+        def safe_weighted_square(w, v):
+            if eqx.is_inexact_array_like(w) and eqx.is_inexact_array_like(v):
+                return jax.numpy.sum(w * v**2)
+            return 0.0
+
         for key in weights.keys():
-            if weights[key] is not None:
-                param_value = parameters[key]
-                weight_value = weights[key]
-                
-                # Use tree_map to handle nested structures within this key
-                reg += lambda_reg * jax.tree_util.tree_reduce(
-                    jax.numpy.add,
-                    jax.tree_util.tree_map(
-                        lambda w, v: jax.numpy.sum(w * v**2) if isinstance(v, jax.Array) else 0.0,
-                        weight_value,
-                        param_value,
-                        is_leaf=lambda x: isinstance(x, jax.Array)
-                    )
-                )
-        
+            # Use tree_map to handle nested structures within this key
+            reg += lambda_reg * jax.tree_util.tree_reduce(
+                jax.numpy.add,
+                jax.tree_util.tree_map(
+                    safe_weighted_square,
+                    weights[key],
+                    parameters[key],
+                    is_leaf=lambda x: x is None,
+                ),
+            )
+
         return reg
 
     def residuals(
@@ -217,9 +220,40 @@ class OptimizationModel:
 
         return batch_residuals, reg
 
+    def mse(
+        self,
+        parameters,
+        y0s__values,
+        solver_parameters,
+        ts,
+        weights,
+        lambda_reg,
+        adjoint=dfx.ForwardMode(),
+    ):
+        """
+        Compute the mean squared error for a single initial condition.
+        """
+        batch_residuals, reg = self.residuals(
+            parameters,
+            y0s__values,
+            solver_parameters,
+            ts,
+            weights,
+            lambda_reg,
+            adjoint=adjoint,
+        )
+        return jnp.mean(batch_residuals**2) + reg
 
     def train(
-        self, data, inds, opt_parameters, static_parameters, solver_parameters, weights, lambda_reg
+        self,
+        data,
+        inds,
+        opt_parameters,
+        other_parameters,
+        solver_parameters,
+        weights,
+        lambda_reg,
+        method="least_squares",
     ):
         """
         Train the model on the given data.
@@ -229,8 +263,7 @@ class OptimizationModel:
             init_parameters: The initial parameters for the model
         """
 
-        # TODO: might need to fix regularization
-        # TODO: add reversemode for adjoint with normal MSE
+        # TODO: might need to make it so all parameters you want to optimize are jax arrays
 
         y0s = jnp.array([data["ys"][ind[0]] for ind in inds])
         values = jnp.array(
@@ -254,18 +287,52 @@ class OptimizationModel:
             ts=ts,
         )
 
-        def residuals_wrapper(opt_params, args):
-            full_params = {**opt_params, **static_parameters}
-            return residuals_(full_params, args)
-
-        solver = optx.LevenbergMarquardt(
-            rtol=1e-8,
-            atol=1e-8,
-            verbose=frozenset({"step", "accepted", "loss", "step_size"}),
+        opt_params, opt_params_static = eqx.partition(
+            opt_parameters, eqx.is_inexact_array_like
         )
 
-        sol = optx.least_squares(
-            residuals_wrapper, solver, opt_parameters, args=(y0s, values)
-        )
+        if method == "least_squares":
 
-        return sol.value
+            def residuals_wrapper(_opt_params, args):
+                full_params = eqx.combine(_opt_params, opt_params_static)
+                return residuals_({**full_params, **other_parameters}, args)
+
+            solver = optx.LevenbergMarquardt(
+                rtol=1e-8,
+                atol=1e-8,
+                verbose=frozenset({"step", "accepted", "loss", "step_size"}),
+            )
+
+            sol = optx.least_squares(
+                residuals_wrapper, solver, opt_params, args=(y0s, values)
+            )
+
+            res = eqx.combine(sol.value, opt_params_static)
+
+            return {**res, **other_parameters}
+
+        elif method == "mse":
+
+            def mse_wrapper(_opt_params, args):
+                full_params = eqx.combine(_opt_params, opt_params_static)
+                return self.mse(
+                    {**full_params, **other_parameters},
+                    args,
+                    solver_parameters,
+                    ts,
+                    weights,
+                    lambda_reg,
+                    adjoint=dfx.RecursiveCheckpointAdjoint(),
+                )
+
+            solver = optx.BFGS(
+                rtol=1e-8,
+                atol=1e-8,
+                verbose=frozenset({"step", "accepted", "loss", "step_size"}),
+            )
+
+            sol = optx.minimise(mse_wrapper, solver, opt_params, args=(y0s, values))
+
+            res = eqx.combine(sol.value, opt_params_static)
+
+            return {**res, **other_parameters}
