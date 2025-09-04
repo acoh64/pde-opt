@@ -68,8 +68,21 @@ autodoc_default_options = {
     'member-order': 'bysource',
     'special-members': '__init__',
     'undoc-members': True,
-    'exclude-members': '__weakref__,domain,kappa,mu,R,derivs,f,theta'
+    'exclude-members': '__weakref__'
 }
+
+# Exclude dataclass fields from documentation
+def autodoc_skip_member(app, what, name, obj, skip, options):
+    """Skip dataclass fields in documentation."""
+    # Skip if it's a dataclass field (has __dataclass_fields__ attribute)
+    if what == 'class' and hasattr(obj, '__dataclass_fields__'):
+        # Check if the member is a dataclass field
+        if name in obj.__dataclass_fields__:
+            return True
+    return skip
+
+def setup(app):
+    app.connect('autodoc-skip-member', autodoc_skip_member)
 
 # Mock imports that are difficult to install or cause issues during build
 autodoc_mock_imports = [
