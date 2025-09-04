@@ -68,7 +68,7 @@ autodoc_default_options = {
     'member-order': 'bysource',
     'special-members': '__init__',
     'undoc-members': True,
-    'exclude-members': '__weakref__'
+    'exclude-members': '__weakref__,domain,kappa,mu,R,derivs,f,theta'
 }
 
 # Mock imports that are difficult to install or cause issues during build
