@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath('..'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'pde-opt'
+project = 'pde_opt'
 copyright = '2025, Alexander E Cohen'
 author = 'Alexander E Cohen'
 
