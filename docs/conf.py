@@ -98,7 +98,7 @@ html_favicon = 'cool_smile.png'
 # GitHub integration
 html_context = {
     "display_github": True,
-    "github_user": "aecohen",  # Update with your GitHub username
+    "github_user": "acoh64",  # Update with your GitHub username
     "github_repo": "pde-opt",  # Update with your repository name
     "github_version": "main",
     "conf_py_path": "/docs/",
