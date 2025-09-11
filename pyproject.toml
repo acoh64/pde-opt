@@ -25,6 +25,7 @@ dependencies = [
     "einops>=0.8.1"
 ]
 
+[project.optional-dependencies]
 dev = [
     "pytest",
     "ruff"
