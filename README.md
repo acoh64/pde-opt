@@ -1,4 +1,4 @@
-<img src="docs/logo.png" width="600em" align="right" />
+<img src="docs/logo.png" width="400em" align="right" />
 
 # pat-pde-opt
 
