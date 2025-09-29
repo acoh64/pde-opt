@@ -103,6 +103,6 @@ We have currently implemented variants of the following equations:
 
 ## TODO
 
-- [] Arbitrary boundary conditions
-- [] Implicit time stepping
-- [] Multi-GPU support
+- [ ] Arbitrary boundary conditions
+- [ ] Implicit time stepping
+- [ ] Multi-GPU support
