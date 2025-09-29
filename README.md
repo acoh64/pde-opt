@@ -106,3 +106,7 @@ We have currently implemented variants of the following equations:
 - [ ] Arbitrary boundary conditions
 - [ ] Implicit time stepping
 - [ ] Multi-GPU support
+
+## License
+
+This code has been published under the MIT licence.
