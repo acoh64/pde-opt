@@ -1,3 +1,12 @@
+# ⚠️ Repository Moved
+
+This repository has been replaced by [**mosaix-pde**](https://github.com/acoh64/mosaix-pde).
+
+Please use the new repository for all code, documentation, and issues.
+
+The old code here is preserved for reference only.
+
+
 <img src="https://raw.githubusercontent.com/acoh64/pde-opt/main/docs/logo.png" width="200em" align="right" />
 
 # pat-pde-opt
